@@ -1,1 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Métricas Bitcoin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="sticky top-0 z-10 border-b border-[#2d3142] bg-[#1a1b2e]">
+    <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
+      <div class="flex items-center gap-2 font-semibold">
+        <span class="text-[#f7931a]">₿</span> Métricas Bitcoin
+      </div>
+      <span class="badge live">on-chain + diario</span>
+    </div>
+  </header>
 
+  <div id="boot-msg" class="mx-auto max-w-7xl px-4 pt-4 text-sm text-slate-400" hidden role="status"></div>
+  <script>
+    (function () {
+      function show(t) {
+        var b = document.getElementById('boot-msg');
+        if (!b) return;
+        b.hidden = false;
+        b.style.color = '#f87171';
+        b.textContent = t;
+      }
+      window.addEventListener('error', function (e) {
+        var el = e.target, url = el && (el.src || el.href);
+        if (url && el !== window) {
+          if (url.indexOf(location.origin) === 0) {
+            show('No se pudo cargar ' + url.replace(location.origin, '') + '. Comprueba que el archivo está en el repositorio con ese nombre y ruta.');
+            return;
+          }
+        }
+        show('Error al cargar la web: ' + (e.message || 'desconocido') + '. Prueba con Ctrl+F5.');
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        show('Error: ' + ((e.reason && e.reason.message) || e.reason));
+      });
+    })();
+  </script>
+
+  <main class="mx-auto max-w-7xl space-y-4 px-4 py-6">
+    <section id="tab-metricas" class="space-y-4">
+      <div id="metrics-root" class="space-y-4"></div>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
