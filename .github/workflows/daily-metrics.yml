@@ -1,1 +1,40 @@
+name: Actualización diaria de métricas
 
+on:
+  schedule:
+    - cron: '0 6,18 * * *'   # dos veces al día (UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: metrics-commits
+  cancel-in-progress: false
+
+jobs:
+  update-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Leer resumen de ETFs
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node scripts/etf.mjs
+      - name: Leer datos extra (Fear and Greed, Rainbow, liquidaciones)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: node scripts/extra.mjs
+      - name: Subir datos actualizados
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/*.json
+          git diff --cached --quiet && { echo "Sin cambios"; exit 0; }
+          git commit -m "Métricas $(date -u +%F-%H%M)"
+          git pull --rebase
+          git push
