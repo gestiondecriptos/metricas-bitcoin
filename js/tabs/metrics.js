@@ -1,5 +1,5 @@
-import { loadMetrics, halvingInfo } from '../bitview.js';
-import { lineChart, thin } from '../charts.js';
+import { loadMetrics, halvingInfo, HALVING_DATES } from '../bitview.js';
+import { lineChart, spiralChart, thin } from '../charts.js';
 import { usd, pct, fmt, cls, esc } from '../format.js';
 
 let st = { status: 'idle' }, range = '4y', etf = null, fng = null, rbw = null, liq = null;
@@ -52,6 +52,76 @@ function halvingZones(hv, athT) {
   return { len, segs, cur: lab(hv.elapsedDays) };
 }
 const ZC = { max: ['#22c55e', 'Zona de máximos'], min: ['#ef4444', 'Zona de mínimos'], up: ['#38bdf8', 'Zona alcista'], down: ['#f59e0b', 'Zona bajista'] };
+
+function buildZoneResolver(d, hv) {
+  const hDates = Object.values(HALVING_DATES).map(s => Date.parse(s)).sort((a, b) => a - b);
+  const fullCycleDays = 4 * 365.25;
+  return ts => {
+    let prevH = hDates[0];
+    for (const hd of hDates) { if (hd <= ts) prevH = hd; else break; }
+    const elapsed = Math.max(0, (ts - prevH) / DAY);
+    const info = hv && ts >= hv.prevDate ? halvingInfo(hv.tip, ts) : { prevDate: prevH, elapsedDays: elapsed, remainingDays: Math.max(0, fullCycleDays - elapsed) };
+    const z = halvingZones(info, d.ath?.t || 0);
+    const meta = ZC[z.cur] || ZC.up;
+    return { key: z.cur, label: meta[1], color: meta[0] };
+  };
+}
+
+function buildSpiralMarkers(d) {
+  const t = d.t || [], pv = d.price || [];
+  const hiArr = d.high && d.high.length === t.length ? d.high : pv;
+  const loArr = d.low && d.low.length === t.length ? d.low : pv;
+
+  const pts = [];
+  for (let i = 0; i < t.length; i++) {
+    if (Number.isFinite(t[i]) && Number.isFinite(pv[i]) && pv[i] > 0) {
+      pts.push({ t: t[i], price: pv[i], high: Number.isFinite(hiArr[i]) && hiArr[i] > 0 ? hiArr[i] : pv[i], low: Number.isFinite(loArr[i]) && loArr[i] > 0 ? loArr[i] : pv[i] });
+    }
+  }
+  if (!pts.length) return { pts: [], halvings: [], cycleLows: [], aths: [] };
+
+  // Puntos blancos: máximos históricos (intradía si disponible, o precio)
+  let runMax = 0;
+  const aths = [];
+  for (const p of pts) {
+    if (p.high > runMax) {
+      runMax = p.high;
+      aths.push({ t: p.t, price: p.high });
+    }
+  }
+
+  // Puntos verdes: halvings
+  const halvings = Object.values(HALVING_DATES).map(ds => {
+    const ht = Date.parse(ds);
+    let best = pts[0], bd = Math.abs(pts[0].t - ht);
+    for (const p of pts) {
+      const diff = Math.abs(p.t - ht);
+      if (diff < bd) { bd = diff; best = p; }
+    }
+    return { t: ht, price: best.price };
+  });
+
+  // Puntos rojos: mínimos de ciclo (intradía si disponible, o precio) entre cada halving y el siguiente
+  const hTimes = Object.values(HALVING_DATES).map(ds => Date.parse(ds)).sort((a, b) => a - b);
+  const windows = [];
+  for (let k = 0; k < hTimes.length; k++) {
+    const startT = hTimes[k];
+    const endT = k + 1 < hTimes.length ? hTimes[k + 1] : Infinity;
+    windows.push([startT, endT]);
+  }
+  const cycleLows = [];
+  for (const [a, b] of windows) {
+    let minPt = null;
+    for (const p of pts) {
+      if (p.t >= a && p.t < b) {
+        if (!minPt || p.low < minPt.price) minPt = { t: p.t, price: p.low };
+      }
+    }
+    if (minPt) cycleLows.push(minPt);
+  }
+
+  return { pts, halvings, cycleLows, aths };
+}
 
 const FNG_ZONES = [[0, 30, '#ef4444'], [30, 45, '#f97316'], [45, 55, '#eab308'], [55, 70, '#84cc16'], [70, 100, '#22c55e']];
 const FNG_ES = { 'Extreme Fear': 'Miedo extremo', Fear: 'Miedo', Neutral: 'Neutral', Greed: 'Codicia', 'Extreme Greed': 'Codicia extrema' };
@@ -116,6 +186,12 @@ export function render() {
       <div><div class="label">Días restantes (est.)</div><div class="num text-xl">${fmt(Math.round(hv.remainingDays))}</div></div>
       <div><div class="label">Bloques restantes</div><div class="num text-xl">${fmt(hv.remBlocks)}</div></div></div>` : '<div class="label p-6">No disponible: no se pudo leer la altura de bloque actual.</div>';
 
+  const spData = buildSpiralMarkers(d);
+  const zoneResolver = buildZoneResolver(d, hv);
+  const spiralSmall = spiralChart({ ...spData, zoneAt: zoneResolver, size: 400 });
+  const spiralLarge = spiralChart({ ...spData, zoneAt: zoneResolver, size: 620 });
+  const spiralNote = 'Precio de Bitcoin desde su inicio en espiral (cada vuelta = 4 años). Halvings en verde, mínimos de ciclo en rojo, máximos históricos en blanco y halo de zona del ciclo.';
+
   const athCard = `<div class="card"><div class="label">Caída desde máximos (ATH)</div>
     <div class="num text-xl ${dd < 0 ? 'neg' : ''}">${dd == null ? '—' : pct(dd, 1)}</div>
     <div class="relative my-1 h-2 rounded bg-[#11131f]"><div class="absolute h-2 rounded bg-[#ef4444] opacity-70" style="width:${dd == null ? 0 : Math.min(100, Math.max(0, -dd)).toFixed(1)}%"></div></div>
@@ -132,7 +208,7 @@ export function render() {
       ${gaugeSvg(cgf.value)}
       <div class="text-center"><b style="color:${fngColor(cgf.value)}">${FNG_ES[cgf.label] || cgf.label || ''}</b>${cgf.streak ? ` · ${cgf.streak} días seguidos` : ''}</div>
       <div class="num mt-2 grid grid-cols-3 gap-2 text-center text-xs">${[['Ayer', cgf.yesterday], ['1 semana', cgf.lastWeek], ['1 mes', cgf.lastMonth]].map(([k, v]) => `<div><div class="label">${k}</div><b style="color:${v == null ? '#94a3b8' : fngColor(v)}">${v == null ? '—' : v}</b></div>`).join('')}</div>
-      <div class="label mt-2">Índice de CoinGecko · ${lnk('https://www.coingecko.com/en/charts/fear-and-greed-index', 'ver gráfico en CoinGecko')}</div></div>` : noData('Fear &amp; Greed');
+      <div class="label mt-2">Índice de CoinGecko · ${lnk('https://www.coingecko.com/en/charts/fear-and-greed-index', 'ver gráfico en CoinGecko')}</div></div>` : noData('Fear & Greed');
 
   const rbwCard = rbw ? `<div class="card"><div class="flex flex-wrap items-baseline justify-between gap-x-2"><h2 class="font-semibold">Rainbow Chart</h2><span class="label">${rbw.asOf || ''}</span></div>
       <div class="relative mt-6"><div class="absolute text-xs" style="left:${((rbw.index - 0.5) / 9 * 100).toFixed(2)}%;top:-18px;transform:translateX(-50%);color:${RBW[rbw.index - 1][2]}">▼</div>
@@ -155,6 +231,7 @@ export function render() {
       <table class="tbl text-xs"><thead><tr><th>Nivel</th><th>Dist.</th><th class="text-right">Valor</th></tr></thead><tbody>${liq.levels.map(l => `<tr><td class="num"><span class="${l.side === 'Longs' ? 'neg' : 'pos'}">${l.side === 'Longs' ? 'L' : 'S'}</span> ${kk(l.lo)}–${kk(l.hi)}</td><td class="num ${cls(l.dist)}">${l.dist > 0 ? '+' : ''}${fmt(l.dist)} %</td><td class="num text-right">${mM(l.value)}</td></tr>`).join('')}</tbody></table>
       <div class="label mt-1">L = longs · S = shorts</div>
       <div class="label mt-2">${lnk('https://axeladlerjr.com/charts/bitcoin-liquidation-map/', 'Mapa en Axel Adler Jr')} · ${lnk('https://www.coingecko.com/en/charts/liquidation-heatmap', 'Heatmap en CoinGecko')}</div></div>` : noData('Liquidaciones Hyperliquid');
+
   root.innerHTML = `
     <div class="flex flex-wrap items-center gap-2"><h2 class="mr-auto font-semibold">RESUMEN</h2>
       ${Object.keys(RANGES).map(r => `<button class="btn ${r === range ? '' : 'btn-ghost'}" data-mrange="${r}" type="button">${r}</button>`).join('')}</div>
@@ -167,8 +244,12 @@ export function render() {
       ${athCard}
     </div>
     <p class="label">Verde = zona de compra · Rojo = zona de venta.</p>
-    ${card('Ciclo de halvings', 'Cada 210.000 bloques (la fecha del próximo es una estimación a 10 min por bloque). Franja de color: zonas del ciclo según días desde el halving (máximos 370–540) y desde el máximo histórico (mínimos 267–406).', halving)}
+    <div class="grid gap-4 lg:grid-cols-2">
+      ${card('Espiral de Bitcoin (4 años por vuelta)', spiralNote, spiralSmall)}
+      ${card('Ciclo de halvings', 'Cada 210.000 bloques (la fecha del próximo es una estimación a 10 min por bloque). Franja de color: zonas del ciclo según días desde el halving (máximos 370–540) y desde el máximo histórico (mínimos 267–406).', halving)}
+    </div>
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">${fngCard}${rbwCard}${etfCard}${hlCard}</div>
+    ${card('Espiral de precio de Bitcoin (cada vuelta = 4 años)', 'Vista ampliada de la espiral desde el inicio de Bitcoin. Eje horizontal: 10 $ · 100 $ · 1K $ · 10K $ · 100K $ · 1M $. Pasa el cursor para ver precio, fecha y zona del ciclo.', spiralLarge)}
     ${card('Precio y precio realizado', 'El precio realizado es el coste medio de todas las monedas en su último movimiento.', has(d.realized)
       ? lineChart({ log: true, kind: 'usd', series: [{ label: 'Precio BTC', color: '#f7931a', pts: points(d, d.price) }, { label: 'Precio realizado', color: '#38bdf8', pts: points(d, d.realized) }] }) : unavailable)}
     ${card('MVRV', 'Precio de mercado ÷ precio realizado. Por debajo de 1, el mercado cotiza bajo el coste medio on-chain.', has(d.mvrv)
