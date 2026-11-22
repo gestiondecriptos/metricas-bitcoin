@@ -148,5 +148,3 @@ export function bindSpirals(root) {
     svg.addEventListener('pointerleave', hide);
   });
 }
-
-Asegúrate de subir todos los archivos actualizados (`js/bitview.js`, `js/charts.js`, `js/spiral.js` y `js/tabs/metrics.js`) y recargar con `Ctrl + F5` (o vaciar caché en DevTools) para que el navegador no use una copia antigua de `spiral.js`[cite: 27, 28, 29, 30]. ¿Te sigue saliendo algún otro mensaje en consola tras limpiar caché?
