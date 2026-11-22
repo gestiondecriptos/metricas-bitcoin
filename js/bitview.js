@@ -45,7 +45,7 @@ export function rsi(vals, n = 14) {
   return out;
 }
 
-const HALVING_DATES = { 1: '2012-11-28', 2: '2016-07-09', 3: '2020-05-11', 4: '2024-04-20' };
+export const HALVING_DATES = { 1: '2012-11-28', 2: '2016-07-09', 3: '2020-05-11', 4: '2024-04-20' };
 /** Ciclo de halvings a partir de la altura de bloque actual (cada 210.000 bloques) */
 export function halvingInfo(tip, now = Date.now()) {
   const epoch = Math.floor(tip / 210000), prevH = epoch * 210000, nextH = prevH + 210000;
@@ -82,6 +82,17 @@ async function fetchDailyOrSearch(name, query, re) {
 const maxOf = a => a.reduce((m, x) => (x != null && x > m ? x : m), 0);
 const scale = (s, cents) => ({ ...s, v: s.v.map(x => (x == null ? null : cents ? x / 100 : x)) });
 
+function alignSeries(baseT, src, priceCents) {
+  if (!src || src.status !== 'fulfilled') return null;
+  const cents = /cent/i.test(src.value.type) || (priceCents && !/dollar/i.test(src.value.type));
+  const scaled = scale(src.value, cents);
+  const map = new Map(scaled.t.map((x, i) => [x, scaled.v[i]]));
+  return baseT.map(x => {
+    const v = map.get(x);
+    return Number.isFinite(v) ? v : null;
+  });
+}
+
 async function fetchTip() {
   for (const u of ['https://mempool.space/api/blocks/tip/height', `${BV}/blocks/tip/height`]) {
     try {
@@ -94,9 +105,11 @@ async function fetchTip() {
 }
 
 export async function loadMetrics() {
-  const [p, r, tip] = await Promise.allSettled([
+  const [p, r, hi, lo, tip] = await Promise.allSettled([
     fetchDailyOrSearch('price_close', 'price close', /(^|_)price_close$/),
     fetchDailyOrSearch('realized_price', 'realized price', /^realized_price$|(^|_)realized_price$/),
+    fetchDailyOrSearch('price_high', 'price high', /(^|_)price_high$/),
+    fetchDailyOrSearch('price_low', 'price low', /(^|_)price_low$/),
     fetchTip(),
   ]);
   if (p.status === 'rejected') throw new Error(`No se pudo leer el precio histórico de Bitview (${p.reason.message}).`);
@@ -105,6 +118,19 @@ export async function loadMetrics() {
   const priceCents = /cent/i.test(p.value.type) || maxOf(p.value.v) > 5e6;
   const price = scale(p.value, priceCents);
   const t = price.t, pv = price.v;
+
+  const alignedHi = alignSeries(t, hi, priceCents);
+  const alignedLo = alignSeries(t, lo, priceCents);
+  const high = pv.map((v, i) => {
+    const h = alignedHi?.[i];
+    if (Number.isFinite(h) && Number.isFinite(v)) return Math.max(h, v);
+    return Number.isFinite(h) ? h : v;
+  });
+  const low = pv.map((v, i) => {
+    const l = alignedLo?.[i];
+    if (Number.isFinite(l) && l > 0 && Number.isFinite(v)) return Math.min(l, v);
+    return Number.isFinite(l) && l > 0 ? l : v;
+  });
 
   let realized = t.map(() => null);
   if (r.status === 'fulfilled') {
@@ -118,12 +144,13 @@ export async function loadMetrics() {
   const rsi14 = rsi(pv, 14);
 
   let ath = { value: 0, t: 0 };
-  pv.forEach((v, i) => { if (v != null && v > ath.value) ath = { value: v, t: t[i] }; });
+  high.forEach((v, i) => { if (v != null && v > ath.value) ath = { value: v, t: t[i] }; });
+  if (!ath.value) pv.forEach((v, i) => { if (v != null && v > ath.value) ath = { value: v, t: t[i] }; });
   const lastIdx = pv.reduce((m, v, i) => (v != null ? i : m), -1);
   const at = a => (lastIdx >= 0 ? a[lastIdx] : null);
 
   return {
-    t, price: pv, realized, mvrv, ma200, rsi: rsi14, ath, errors,
+    t, price: pv, high, low, realized, mvrv, ma200, rsi: rsi14, ath, errors,
     last: { t: t[lastIdx], price: at(pv), realized: at(realized), mvrv: at(mvrv), ma200: at(ma200), rsi: at(rsi14) },
     tip: tip.status === 'fulfilled' ? tip.value : null,
   };
