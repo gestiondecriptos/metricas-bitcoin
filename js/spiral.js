@@ -1,175 +1,152 @@
-// Gráficos de líneas en SVG (sin librerías)
-import { fmt, usd } from './format.js';
+// Espiral de Bitcoin: precio diario desde 2010. Una vuelta = 4 años (2009 arriba, sentido horario). Radio = precio (escala logarítmica).
+// Halo de color = zona del ciclo (misma lógica que la tarjeta «Ciclo de halvings»). Sin librerías.
+import { HALVING_DATES } from './bitview.js';
+import { usd, fmt } from './format.js';
 
-const day = t => new Date(t).toISOString().slice(0, 10);
-export const thin = (pts, n = 500) => {
-  if (pts.length <= n) return pts;
-  const step = pts.length / n, out = [];
-  for (let i = 0; i < n; i++) out.push(pts[Math.floor(i * step)]);
-  out.push(pts.at(-1));
-  return out;
-};
+const DAY = 864e5, W = 640, C = 320, TURN = 4 * 365.25 * DAY, T0 = Date.UTC(2009, 0, 1);
+const P_MIN = 0.05, R_MIN = 12, R_MAX = 270, L0 = Math.log10(P_MIN), K = (R_MAX - R_MIN) / (6 - L0);
+const ZC = { max: ['#22c55e', 'Zona de máximos'], min: ['#ef4444', 'Zona de mínimos'], up: ['#38bdf8', 'Zona alcista'], down: ['#f59e0b', 'Zona bajista'] };
+const dateEs = t => new Date(t).toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' });
+const f1 = v => v.toFixed(1);
 
-/* ---------- Gráfico con eje Y y tooltip (Inicio, Métricas…) ---------- */
-const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-const compact = new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 });
-const KIND = {
-  usd: v => usd(v),
-  eur: v => fmt(v, { style: 'currency', currency: 'EUR' }),
-  idx: v => fmt(v, { maximumFractionDigits: 1 }),
-  dec2: v => fmt(v, { maximumFractionDigits: 2 }),
-};
-function niceTicks(lo, hi, n = 5) {
-  const span = hi - lo || Math.abs(hi) || 1, raw = span / (n - 1), mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
-  const out = [];
-  for (let k = Math.floor(lo / step); k <= Math.ceil(hi / step); k++) out.push(k * step);
-  if (out.length < 2) out.push(out[0] + step);
-  return out;
+function polar(t, p) {
+  const a = (t - T0) / TURN * 2 * Math.PI;
+  const r = Math.min(R_MAX + 10, R_MIN + K * (Math.log10(Math.max(p, P_MIN)) - L0));
+  return [C + r * Math.sin(a), C - r * Math.cos(a)];
 }
 
-/** Marcas del eje Y en escala logarítmica: 1-2-5 por década (solo 1 por década si el rango es muy grande) */
-function logTicks(lo, hi) {
-  const a = Math.floor(Math.log10(lo)), b = Math.ceil(Math.log10(hi)), mult = Math.log10(hi / lo) <= 3.5 ? [1, 2, 5] : [1];
-  const all = [];
-  for (let e = a; e <= b; e++) for (const m of mult) all.push(m * 10 ** e);
-  let i0 = 0, i1 = all.length - 1;
-  all.forEach((v, i) => { if (v <= lo) i0 = i; });
-  for (let i = all.length - 1; i >= 0; i--) if (all[i] >= hi) i1 = i;
-  const out = all.slice(i0, i1 + 1);
-  return out.length > 1 ? out : [10 ** a, 10 ** (a + 1)];
-}
-const chartWidth = () => Math.max(300, Math.min(640, Math.round((typeof innerWidth === 'number' ? innerWidth : 700) - 56)));
-const axisLabel = v => (Math.abs(v) >= 1000 ? compact.format(v) : fmt(v, { maximumFractionDigits: v % 1 ? 2 : 0 }));
-
-/**
- * Gráfico de líneas con eje Y, fechas en X y valor al pasar el cursor (Bitview, Métricas).
- * series: [{ label, color, pts: [[tiempoMs, valor|null], ...] }] · log: escala logarítmica · lines: [{ y, label }] líneas horizontales
- * domain: [min, max] fijo · kind: 'usd' | 'eur' | 'idx' | 'dec2' (formato del valor en el tooltip)
- */
-export function lineChart({ series, log = false, lines = [], domain = null, height = 220, kind = 'idx', yfmt = null }) {
-  const ok = v => Number.isFinite(v) && (!log || v > 0);
-  const S = series.map(s => ({ ...s, good: s.pts.filter(p => Number.isFinite(p[0]) && ok(p[1])) }));
-  const all = S.flatMap(s => s.good);
-  if (all.length < 2) return '<div class="label p-6">Sin datos disponibles para este gráfico.</div>';
-  const W = chartWidth(), H = height, PL = 52, PR = 10, PT = 8, PB = 20, tr = v => (log ? Math.log(v) : v);
-  let t0 = Infinity, t1 = -Infinity, lo = Infinity, hi = -Infinity;
-  for (const p of all) { t0 = Math.min(t0, p[0]); t1 = Math.max(t1, p[0]); lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); }
-  if (domain) { lo = domain[0]; hi = domain[1]; }
-  const ticks = log ? logTicks(Math.max(lo, 1e-9), hi) : niceTicks(lo, hi);
-  const ya = tr(domain && !log ? lo : ticks[0]), yb = tr(domain && !log ? hi : ticks.at(-1));
-  const X = t => PL + (t - t0) / (t1 - t0 || 1) * (W - PL - PR);
-  const Y = v => H - PB - (Math.min(Math.max(tr(v), ya), yb) - ya) / (yb - ya || 1) * (H - PT - PB);
-  const shown = ticks.filter(v => tr(v) >= ya - 1e-9 && tr(v) <= yb + 1e-9);
-  const grid = shown.map(v => `<line x1="${PL}" x2="${W - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#2d3142" stroke-width=".6"/><text x="${PL - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" fill="#94a3b8" font-size="10">${axisLabel(v)}</text>`).join('');
-  const xl = [0, 1 / 3, 2 / 3, 1].map((f, i) => `<text x="${X(t0 + f * (t1 - t0)).toFixed(1)}" y="${H - 5}" text-anchor="${i === 0 ? 'start' : i === 3 ? 'end' : 'middle'}" fill="#94a3b8" font-size="10">${day(t0 + f * (t1 - t0))}</text>`).join('');
-  const paths = S.map(s => {
-    let d = '', pen = false;
-    for (const [t, v] of s.pts) {
-      if (!Number.isFinite(t) || !ok(v)) { pen = false; continue; }
-      d += `${pen ? 'L' : 'M'}${X(t).toFixed(1)},${Y(v).toFixed(1)}`; pen = true;
-    }
-    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"/>`;
-  }).join('');
-  const hl = lines.filter(l => ok(l.y)).map(l =>
-    `<line x1="${PL}" x2="${W - PR}" y1="${Y(l.y).toFixed(1)}" y2="${Y(l.y).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 4"/><text x="${W - PR - 2}" y="${(Y(l.y) - 3).toFixed(1)}" text-anchor="end" fill="#94a3b8" font-size="10">${l.label}</text>`).join('');
-  const marks = `<line class="ct-v" y1="${PT}" y2="${H - PB}" stroke="#64748b" stroke-dasharray="3 3" visibility="hidden"/>`
-    + S.map((s, i) => `<circle class="ct-m" data-i="${i}" r="4" fill="${s.color}" stroke="#0b0d16" stroke-width="1.5" visibility="hidden"/>`).join('');
-  const data = { W, H, PL, PR, PT, PB, t0, t1, y0: ya, y1: yb, log, kind, rk: null, time: false, s: S.map(s => ({ l: s.label, c: s.color, p: s.good.map(p => [p[0], +p[1].toPrecision(7)]) })) };
-  const yf = yfmt || KIND[kind] || KIND.idx;
-  const legend = S.map(s => `<span><i style="display:inline-block;width:.6rem;height:.2rem;background:${s.color}"></i> ${s.label}</span>`).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" class="ct w-full" style="touch-action:pan-y" role="img" aria-label="${esc(S.map(s => s.label).join(', '))}" data-ct="${esc(JSON.stringify(data))}">${grid}${hl}${xl}${paths}${marks}</svg>
-    <div class="num mt-1 text-xs text-slate-400">mín ${yf(lo)} · máx ${yf(hi)}${log ? ' · escala log' : ''}</div>
-    <div class="mt-1 flex flex-wrap gap-x-4 text-xs text-slate-400">${legend}</div>`;
+/** Zona según días desde el halving (x) y día del máximo del ciclo respecto al halving (A): idéntica a la de «Ciclo de halvings» */
+function zoneOf(x, A) {
+  const zs = [{ k: 'max', a: 370, b: 540 }];
+  if (A != null) zs.push({ k: 'min', a: A + 267, b: A + 406 });
+  const z = zs.find(q => x >= q.a && x < q.b);
+  if (z) return z.k;
+  const done = zs.filter(q => q.b <= x).sort((p, q) => q.b - p.b)[0];
+  if (done) return done.k === 'min' ? 'up' : 'down';
+  return zs.slice().sort((p, q) => p.a - q.a)[0].k === 'max' ? 'up' : 'down';
 }
 
-/**
- * series: [{ label, color, pts: [[tiempoMs, valor, valorOriginal?], ...] }]
- * zero / yMin / yMax: incluir siempre el 0 (o esos valores) en el eje Y · kind: 'usd' | 'eur' | 'idx' (formato del valor) · rawKind: formato del 3.er dato (opcional) · time: mostrar hora en el tooltip
- */
-export function axisChart({ series, kind = 'usd', rawKind = null, time = false, height = 220, zero = false, yMin = null, yMax = null }) {
-  const S = series.map(s => ({ ...s, pts: s.pts.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])) })).filter(s => s.pts.length);
-  const all = S.flatMap(s => s.pts);
-  if (all.length < 2) return '<div class="label p-6">Sin datos disponibles para este gráfico.</div>';
-  const W = Math.max(300, Math.min(640, Math.round((typeof innerWidth === 'number' ? innerWidth : 700) - 56)));
-  const H = height, PL = 52, PR = 10, PT = 8, PB = 20;
-  let t0 = Infinity, t1 = -Infinity, lo = Infinity, hi = -Infinity;
-  for (const p of all) { t0 = Math.min(t0, p[0]); t1 = Math.max(t1, p[0]); lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); }
-  if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
-  if (yMin != null) lo = Math.min(lo, yMin);
-  if (yMax != null) hi = Math.max(hi, yMax);
-  const ticks = niceTicks(lo, hi), y0 = ticks[0], y1 = ticks.at(-1);
-  const X = t => PL + (t - t0) / (t1 - t0 || 1) * (W - PL - PR);
-  const Y = v => H - PB - (v - y0) / (y1 - y0 || 1) * (H - PT - PB);
-  const yl = v => (kind === 'idx' ? fmt(v, { maximumFractionDigits: 0 }) : compact.format(v));
-  const grid = ticks.map(v => `<line x1="${PL}" x2="${W - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#2d3142" stroke-width=".6"/><text x="${PL - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" fill="#94a3b8" font-size="10">${yl(v)}</text>`).join('');
-  const xl = [0, 1 / 3, 2 / 3, 1].map((f, i) => `<text x="${X(t0 + f * (t1 - t0)).toFixed(1)}" y="${H - 5}" text-anchor="${i === 0 ? 'start' : i === 3 ? 'end' : 'middle'}" fill="#94a3b8" font-size="10">${day(t0 + f * (t1 - t0))}</text>`).join('');
-  const paths = S.map(s => `<path d="${s.pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`).join('');
-  const dots = S.map(s => (s.pts.length <= 80 ? s.pts.map(p => `<circle cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.6" fill="${s.color}"/>`).join('') : '')).join('');
-  const marks = `<line class="ct-v" y1="${PT}" y2="${H - PB}" stroke="#64748b" stroke-dasharray="3 3" visibility="hidden"/>`
-    + S.map((s, i) => `<circle class="ct-m" data-i="${i}" r="4.5" fill="${s.color}" stroke="#0b0d16" stroke-width="1.5" visibility="hidden"/>`).join('');
-  const data = {
-    W, H, PL, PR, PT, PB, t0, t1, y0, y1, kind, rk: rawKind, time,
-    s: S.map(s => ({ l: s.label, c: s.color, p: s.pts.map(p => (p[2] != null ? [p[0], +p[1].toFixed(4), +(+p[2]).toFixed(4)] : [p[0], +p[1].toFixed(4)])) })),
-  };
-  return `<svg viewBox="0 0 ${W} ${H}" class="ct w-full" style="touch-action:pan-y" role="img" aria-label="${esc(S.map(s => s.label).join(', '))}" data-ct="${esc(JSON.stringify(data))}">${grid}${xl}${paths}${dots}${marks}</svg>`;
+let GEO = null;   // geometría de la última espiral dibujada (la usa el tooltip)
+
+function build(d) {
+  const T = d.t, P = d.price, n = T.length;
+  const first = P.findIndex(v => v > 0);
+  if (first < 0) return null;
+  let last = n - 1; while (last > first && !(P[last] > 0)) last--;
+  const Hs = [null, ...Object.values(HALVING_DATES).map(s => Date.parse(s))];   // Hs[1..4]
+  const ix = t => Math.max(0, Math.min(n, Math.round((t - T[0]) / DAY)));
+  const Hh = i => { const v = d.high && d.high[i]; return v > P[i] ? v : P[i]; };                      // máximo del día (o el cierre si no hay)
+  const argmax = (a, b) => { let m = -1; for (let i = Math.max(a, first); i < Math.min(b, last + 1); i++) if (P[i] > 0 && (m < 0 || Hh(i) > Hh(m))) m = i; return m; };
+  const Lw = i => { const v = d.low && d.low[i]; return v > 0 && v < P[i] ? v : P[i]; };          // mínimo del día (o el cierre si no hay)
+  const argmin = (a, b) => { let m = -1; for (let i = Math.max(a, first); i < Math.min(b, last + 1); i++) if (P[i] > 0 && (m < 0 || Lw(i) < Lw(m))) m = i; return m; };
+  const near = t => { let i = Math.min(last, Math.max(first, ix(t))); for (let k = 0; k < 10 && !(P[i] > 0); k++) i = Math.min(last, i + 1); return i; };
+
+  // Máximo de cada ciclo: 0 = previo al 1.er halving; 1..3 = máximo en los 730 días tras el halving; 4 = ATH actual (como la tarjeta)
+  const aI = [argmax(first, ix(Hs[1]))];
+  for (let c = 1; c <= 3; c++) aI[c] = argmax(ix(Hs[c]), ix(Math.min(Hs[c] + 730 * DAY, Hs[c + 1])));
+  aI[4] = d.ath && d.ath.t >= Hs[4] ? near(d.ath.t) : argmax(ix(Hs[4]), ix(Hs[4] + 730 * DAY));
+  const cyc = t => { let c = 0; for (let k = 1; k <= 4; k++) if (t >= Hs[k]) c = k; return c; };
+  const zoneFor = t => { const c = cyc(t); return c === 0 || aI[c] < 0 ? 'none' : zoneOf((t - Hs[c]) / DAY, (T[aI[c]] - Hs[c]) / DAY); };
+
+  // Puntos de la línea (1 de cada 3 días + el último)
+  const pts = [];
+  for (let i = first; i <= last; i += 3) if (P[i] > 0) pts.push(i);
+  if (pts.at(-1) !== last) pts.push(last);
+  const line = pts.map(i => { const [x, y] = polar(T[i], P[i]); return { x, y, t: T[i], p: P[i], z: zoneFor(T[i]) }; });
+
+  // Marcas
+  const marks = [];
+  const mk = (kind, label, i, p = P[i]) => { const [x, y] = polar(T[i], p); marks.push({ kind, label, x, y, t: T[i], p, z: zoneFor(T[i]) }); };
+  for (let k = 1; k <= 4; k++) if (Hs[k] <= T[last]) mk('h', `Halving ${k}.º`, near(Hs[k]));
+  for (let c = 0; c <= 4; c++) {
+    if (aI[c] < 0) continue;
+    const end = c < 4 ? aI[c + 1] : last + 1;
+    if (c === 4 && T[last] - T[aI[4]] < 267 * DAY) continue;                    // aún no empezó la zona de mínimos
+    const m = argmin(aI[c] + 1, end);
+    if (m >= 0) mk('l', (c === 4 ? 'Mínimo desde el máximo (ciclo sin cerrar)' : 'Mínimo de ciclo') + (Lw(m) < P[m] ? ' · mín. del día' : ''), m, Lw(m));
+  }
+  let run = 0; const byMonth = new Map();                                       // máximos históricos (intradía): el más alto de cada mes
+  for (let i = first; i <= last; i++) if (Hh(i) > run) { run = Hh(i); byMonth.set(new Date(T[i]).toISOString().slice(0, 7), i); }
+  for (const i of byMonth.values()) mk('a', 'Máximo histórico' + (Hh(i) > P[i] ? ' · máx. del día' : ''), i, Hh(i));
+
+  return { line, marks, Hs, aT: aI.map(i => (i >= 0 ? T[i] : null)), zoneFor, cyc, lastPt: line.at(-1) };
 }
 
-/** Tooltip global: gráficos «svg.ct» (valor al pasar el cursor o tocar) y cualquier elemento con data-tip. Llamar una sola vez al arrancar. */
-export function initChartTips() {
-  if (typeof document === 'undefined' || document.getElementById('ct-tip')) return;
-  const tip = document.createElement('div');
-  tip.id = 'ct-tip';
-  tip.style.cssText = 'position:fixed;z-index:60;pointer-events:none;display:none;background:#0b0d16;border:1px solid #2d3142;border-radius:6px;padding:6px 10px;font-size:.8rem;line-height:1.35;white-space:nowrap';
-  document.body.appendChild(tip);
-  const cache = new WeakMap();
-  let shown = null;
-  const place = (x, y) => {
-    tip.style.display = 'block';
-    tip.style.left = Math.max(4, Math.min(x + 14, innerWidth - tip.offsetWidth - 8)) + 'px';
-    tip.style.top = Math.max(4, Math.min(y + 14, innerHeight - tip.offsetHeight - 8)) + 'px';
-  };
-  const hide = () => {
-    tip.style.display = 'none';
-    if (shown) { shown.querySelectorAll('.ct-v,.ct-m').forEach(e => e.setAttribute('visibility', 'hidden')); shown = null; }
-  };
-  const chartTip = (svg, e) => {
-    let c = cache.get(svg);
-    if (!c) { try { c = JSON.parse(svg.dataset.ct); } catch { return; } cache.set(svg, c); }
-    const r = svg.getBoundingClientRect(), cx = (e.clientX - r.left) / r.width * c.W;
-    if (cx < c.PL || cx > c.W - c.PR) { hide(); return; }
-    const tt = c.t0 + (cx - c.PL) / (c.W - c.PL - c.PR) * (c.t1 - c.t0);
-    const X = t => c.PL + (t - c.t0) / (c.t1 - c.t0 || 1) * (c.W - c.PL - c.PR);
-    const tr = v => (c.log ? Math.log(v) : v);
-    const Y = v => c.H - c.PB - (Math.min(Math.max(tr(v), c.y0), c.y1) - c.y0) / (c.y1 - c.y0 || 1) * (c.H - c.PT - c.PB);
-    if (shown && shown !== svg) hide();
-    shown = svg;
-    let head = null, rows = '';
-    c.s.forEach((s, i) => {
-      let bp = null, bd = Infinity;
-      for (const p of s.p) { const d = Math.abs(p[0] - tt); if (d < bd) { bd = d; bp = p; } }
-      if (!bp) return;
-      if (head == null) head = bp[0];
-      rows += `<div><i style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:${s.c}"></i> ${s.l}: <b class="num">${KIND[c.kind](bp[1])}</b>${bp[2] != null && c.rk ? ` · <span class="num">${KIND[c.rk](bp[2])}</span>` : ''}</div>`;
-      const m = svg.querySelector(`.ct-m[data-i="${i}"]`);
-      if (m) { m.setAttribute('cx', X(bp[0]).toFixed(1)); m.setAttribute('cy', Y(bp[1]).toFixed(1)); m.setAttribute('visibility', 'visible'); }
-    });
-    if (head == null) return;
-    const v = svg.querySelector('.ct-v');
-    if (v) { v.setAttribute('x1', X(head).toFixed(1)); v.setAttribute('x2', X(head).toFixed(1)); v.setAttribute('visibility', 'visible'); }
-    tip.innerHTML = `<div class="label">${c.time ? new Date(head).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : day(head)}</div>${rows}`;
-    place(e.clientX, e.clientY);
-  };
-  const onMove = e => {
-    const t = e.target instanceof Element ? e.target : null;
-    if (t && t.closest('svg.sp')) return;   // la espiral gestiona su propio tooltip (spiral.js)
-    const svg = t && t.closest('svg.ct');
-    if (svg) { chartTip(svg, e); return; }
-    const el = t && t.closest('[data-tip]');
-    hide();
-    if (el) { tip.innerHTML = el.dataset.tip; place(e.clientX, e.clientY); }
-  };
-  document.addEventListener('pointermove', onMove, { passive: true });
-  document.addEventListener('pointerdown', onMove, { passive: true });
-  document.addEventListener('scroll', hide, true);
+const path = arr => 'M' + arr.map(q => `${f1(q.x)},${f1(q.y)}`).join('L');
+const dot = (c, round = true) => `<i style="display:inline-block;width:.7rem;height:.7rem;margin-right:.35rem;border-radius:${round ? '50%' : '2px'};background:${c}"></i>`;
+
+/** Devuelve {svg, legend} (HTML). Pinta toda la historia de d (resultado de loadMetrics) */
+export function spiralChart(d) {
+  const g = build(d);
+  GEO = g;
+  if (!g) return null;
+
+  // Rejilla: anillos por década, ejes, años
+  const decs = ['1 $', '10 $', '100 $', '1K $', '10K $', '100K $', '1M $'];
+  const rr = i => R_MIN + K * (i - L0);
+  let grid = decs.map((_, i) => `<circle cx="${C}" cy="${C}" r="${f1(rr(i))}" fill="none" stroke="#2d3142" stroke-width="1"/>`).join('');
+  const dg = R_MAX * Math.SQRT1_2;
+  grid += `<g stroke="#2d3142" stroke-width="1"><line x1="${C}" y1="${C - R_MAX - 6}" x2="${C}" y2="${C + R_MAX + 6}"/><line x1="${C - R_MAX - 6}" y1="${C}" x2="${C + R_MAX + 6}" y2="${C}"/></g>`
+    + `<g stroke="#2d3142" stroke-width="1" stroke-dasharray="3 4"><line x1="${f1(C - dg)}" y1="${f1(C - dg)}" x2="${f1(C + dg)}" y2="${f1(C + dg)}"/><line x1="${f1(C - dg)}" y1="${f1(C + dg)}" x2="${f1(C + dg)}" y2="${f1(C - dg)}"/></g>`;
+  const txt = 'font-size="12" fill="#94a3b8" font-weight="600"';
+  grid += `<text x="${C}" y="20" text-anchor="middle" ${txt}>2009 · ’13 · ’17 · ’21 · ’25</text>`
+    + `<text x="${C}" y="${W - 8}" text-anchor="middle" ${txt}>2011 · ’15 · ’19 · ’23 · ’27</text>`
+    + `<text transform="translate(${W - 10} ${C}) rotate(90)" text-anchor="middle" ${txt}>2010 · ’14 · ’18 · ’22 · ’26</text>`
+    + `<text transform="translate(12 ${C}) rotate(-90)" text-anchor="middle" ${txt}>2012 · ’16 · ’20 · ’24 · ’28</text>`;
+  grid += decs.map((s, i) => `<text x="${f1(C + rr(i) - 3)}" y="${C + 14}" text-anchor="end" font-size="10" fill="#94a3b8" stroke="#11131f" stroke-width="3" paint-order="stroke">${s}</text>`).join('');
+
+  // Halo por zonas (tramos consecutivos de la misma zona)
+  const segs = []; let cur = null;
+  g.line.forEach((q, j) => {
+    if (!cur || cur.z !== q.z) { cur = { z: q.z, a: j > 0 ? [g.line[j - 1], q] : [q] }; segs.push(cur); } else cur.a.push(q);
+  });
+  const halo = segs.filter(s => s.z !== 'none' && s.a.length > 1).map(s => `<path d="${path(s.a)}" fill="none" stroke="${ZC[s.z][0]}" stroke-width="9" stroke-opacity=".38" stroke-linejoin="round"/>`).join('');
+
+  const m = { a: [], h: [], l: [] };
+  g.marks.forEach(k => m[k.kind].push(k));
+  const marks = m.a.map(k => `<circle cx="${f1(k.x)}" cy="${f1(k.y)}" r="2.6" fill="#fff"/>`).join('')
+    + m.h.map(k => `<circle cx="${f1(k.x)}" cy="${f1(k.y)}" r="6" fill="#22c55e" stroke="#11131f" stroke-width="2"/>`).join('')
+    + m.l.map(k => `<circle cx="${f1(k.x)}" cy="${f1(k.y)}" r="6.5" fill="#ef4444" stroke="#11131f" stroke-width="2"/>`).join('');
+  const now = `<circle cx="${f1(g.lastPt.x)}" cy="${f1(g.lastPt.y)}" r="5" fill="#f7931a" stroke="#fff" stroke-width="2"/>`;
+
+  const svg = `<svg class="sp block w-full" viewBox="0 0 ${W} ${W}" role="img" aria-label="Espiral del precio de Bitcoin: una vuelta cada 4 años, radio según el precio">${grid}${halo}<path d="${path(g.line)}" fill="none" stroke="#f7931a" stroke-width="1.6" stroke-linejoin="round"/>${marks}${now}<circle class="sp-h" r="9" fill="none" stroke="#fff" stroke-width="2" visibility="hidden"/></svg>`;
+  const legend = `<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-300">`
+    + Object.values(ZC).map(([c, l]) => `<span>${dot(c, false)}${l}</span>`).join('')
+    + `<span>${dot('#22c55e')}Halving</span><span>${dot('#ef4444')}Mínimo de ciclo</span><span>${dot('#fff')}Máximo histórico</span><span>${dot('#f7931a')}Hoy</span></div>`
+    + `<div class="label mt-1">Cada vuelta = 4 años (2009 arriba, sentido horario). Distancia al centro = precio (log). Sin halo: antes del 1.er halving. Pasa el cursor o toca para ver precio, fecha y zona.</div>`;
+  return { svg, legend };
 }
+
+/** Tooltip de las espirales dentro de root (llamar tras cada render). Usa el recuadro global #ct-tip de initChartTips() */
+export function bindSpirals(root) {
+  const tip = document.getElementById('ct-tip');
+  if (!tip || !GEO) return;
+  const g = GEO;
+  const body = (head, t, p, z) => {
+    const c = g.cyc(t), parts = [`<div class="label">${head ? `<b style="color:#e2e8f0">${head}</b> · ` : ''}${dateEs(t)}</div><div><b class="num">${usd(p)}</b></div>`];
+    parts.push(z === 'none' ? '<div class="label">Ciclo previo al primer halving</div>'
+      : `<div>${dot(ZC[z][0], false)}${ZC[z][1]}</div><div class="label">día ${fmt(Math.round((t - g.Hs[c]) / DAY))} desde el halving${g.aT[c] && t > g.aT[c] ? ` · ${fmt(Math.round((t - g.aT[c]) / DAY))} desde el máximo` : ''}</div>`);
+    return parts.join('');
+  };
+  root.querySelectorAll('svg.sp').forEach(svg => {
+    const hl = svg.querySelector('.sp-h');
+    const hide = () => { tip.style.display = 'none'; hl.setAttribute('visibility', 'hidden'); };
+    const show = e => {
+      const r = svg.getBoundingClientRect(), vx = (e.clientX - r.left) / r.width * W, vy = (e.clientY - r.top) / r.height * W;
+      let best = null, bd = 12 * 12, head = '';
+      for (const k of g.marks) { const d2 = (k.x - vx) ** 2 + (k.y - vy) ** 2; if (d2 < bd) { bd = d2; best = k; head = k.label; } }
+      if (!best) { bd = 18 * 18; for (const q of g.line) { const d2 = (q.x - vx) ** 2 + (q.y - vy) ** 2; if (d2 < bd) { bd = d2; best = q; } } }
+      if (!best) { hide(); return; }
+      hl.setAttribute('cx', f1(best.x)); hl.setAttribute('cy', f1(best.y)); hl.setAttribute('visibility', 'visible');
+      tip.innerHTML = body(head, best.t, best.p, best.z);
+      tip.style.display = 'block';
+      tip.style.left = Math.max(4, Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8)) + 'px';
+      tip.style.top = Math.max(4, Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8)) + 'px';
+    };
+    svg.addEventListener('pointermove', show);
+    svg.addEventListener('pointerdown', show);
+    svg.addEventListener('pointerleave', hide);
+  });
+}
+
+Asegúrate de subir todos los archivos actualizados (`js/bitview.js`, `js/charts.js`, `js/spiral.js` y `js/tabs/metrics.js`) y recargar con `Ctrl + F5` (o vaciar caché en DevTools) para que el navegador no use una copia antigua de `spiral.js`[cite: 27, 28, 29, 30]. ¿Te sigue saliendo algún otro mensaje en consola tras limpiar caché?
